@@ -1,0 +1,13 @@
+{
+  "name": "halftone-forge-cloud",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-02",
+  "vars": {
+    "GITHUB_OWNER": "armanioller",
+    "GITHUB_REPO": "hf-data",
+    "ALLOWED_ORIGIN": "https://armanioller.github.io"
+  },
+  "secrets": {
+    "required": ["GITHUB_TOKEN"]
+  }
+}
