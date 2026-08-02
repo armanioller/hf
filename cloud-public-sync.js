@@ -5,7 +5,8 @@
   var CLIENT_ID_KEY = 'hfCloudClientIdV1';
   var GALLERY_KEY = 'halftoneForgeGallery';
   var SETTINGS_PREFIX = 'halftoneForge';
-  var UPLOADED_KEY = 'hfCloudUploadedImagesV1';
+  var UPLOADED_IMAGES_KEY = 'hfCloudUploadedImagesV1';
+  var UPLOADED_MUSIC_KEY = 'hfCloudUploadedMusicV1';
 
   var frame = document.getElementById('hfAppFrame');
   var statusEl = document.getElementById('hfCloudStatus');
@@ -19,8 +20,11 @@
   var queue = Promise.resolve();
   var galleryTimer = 0;
   var settingsTimer = 0;
+  var musicTimer = 0;
+  var musicChecking = false;
   var lastGalleryFingerprint = '';
   var lastSettingsFingerprint = '';
+  var lastMusicFingerprint = '';
 
   localStorage.removeItem('hfCloudToken');
   sessionStorage.removeItem('hfCloudTokenSession');
@@ -30,11 +34,15 @@
     var current = localStorage.getItem(CLIENT_ID_KEY);
     if (current && /^[a-zA-Z0-9_-]{16,80}$/.test(current)) return current;
     var id = '';
-    if (window.crypto && typeof window.crypto.randomUUID === 'function') id = window.crypto.randomUUID().replace(/-/g, '');
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      id = window.crypto.randomUUID().replace(/-/g, '');
+    }
     if (!id) {
       var bytes = new Uint8Array(24);
       window.crypto.getRandomValues(bytes);
-      id = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      id = Array.prototype.map.call(bytes, function (b) {
+        return b.toString(16).padStart(2, '0');
+      }).join('');
     }
     localStorage.setItem(CLIENT_ID_KEY, id);
     return id;
@@ -70,7 +78,9 @@
     var response = await fetch(API_BASE + path, options || {});
     var text = await response.text();
     var body = text ? safeJsonParse(text, text) : null;
-    if (!response.ok) throw new Error(body && body.error ? body.error : ('Servidor respondeu ' + response.status));
+    if (!response.ok) {
+      throw new Error(body && body.error ? body.error : ('Servidor respondeu ' + response.status));
+    }
     return body;
   }
 
@@ -106,39 +116,33 @@
     return Array.isArray(parsed) ? parsed : [];
   }
 
-  function preferenceValues() {
+  function collectPreferences() {
     var values = {};
     for (var i = 0; i < localStorage.length; i++) {
       var key = localStorage.key(i);
-      if (!key || key === GALLERY_KEY || key === CLIENT_ID_KEY || key === UPLOADED_KEY) continue;
+      if (!key || key === GALLERY_KEY || key === CLIENT_ID_KEY || key === UPLOADED_IMAGES_KEY || key === UPLOADED_MUSIC_KEY) continue;
       if (key.indexOf(SETTINGS_PREFIX) === 0) values[key] = localStorage.getItem(key);
     }
-    return values;
-  }
-
-  function collectPreferences() {
     return {
       schema: 'halftone-forge-cloud-preferences',
       version: 1,
       savedAt: new Date().toISOString(),
-      values: preferenceValues()
+      values: values
     };
   }
 
-  function workspaceSettings() {
+  function collectWorkspace() {
     var settings = {};
     try {
-      if (appWin && typeof appWin.serializeAppSettings === 'function') settings = appWin.serializeAppSettings() || {};
+      if (appWin && typeof appWin.serializeAppSettings === 'function') {
+        settings = appWin.serializeAppSettings() || {};
+      }
     } catch (_) {}
-    return settings;
-  }
-
-  function collectWorkspace() {
     return {
       schema: 'halftone-forge-project',
       version: 1,
       savedAt: new Date().toISOString(),
-      appSettings: workspaceSettings(),
+      appSettings: settings,
       gallery: null,
       userPresets: null,
       dtf: null,
@@ -146,14 +150,50 @@
     };
   }
 
-  function uploadedMap() {
-    var map = safeJsonParse(localStorage.getItem(UPLOADED_KEY) || '{}', {});
+  function storedMap(key) {
+    var map = safeJsonParse(localStorage.getItem(key) || '{}', {});
     return map && typeof map === 'object' ? map : {};
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var value = String(reader.result || '');
+        var comma = value.indexOf(',');
+        resolve(comma >= 0 ? value.slice(comma + 1).replace(/\s/g, '') : '');
+      };
+      reader.onerror = function () { reject(reader.error || new Error('Falha ao ler arquivo.')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function localMusicRecords() {
+    try {
+      if (appWin && typeof appWin.musicDbAll === 'function') {
+        var records = await appWin.musicDbAll();
+        return Array.isArray(records) ? records : [];
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  async function musicFingerprint() {
+    var records = await localMusicRecords();
+    return stableFingerprint(records.map(function (record) {
+      return {
+        id: record.id,
+        name: record.name,
+        type: record.type,
+        size: record.blob ? record.blob.size : 0,
+        addedAt: record.addedAt || 0
+      };
+    }));
   }
 
   async function syncGallery(reason) {
     var items = localGalleryItems();
-    var uploaded = uploadedMap();
+    var uploaded = storedMap(UPLOADED_IMAGES_KEY);
     var metadata = [];
 
     for (var i = 0; i < items.length; i++) {
@@ -165,7 +205,7 @@
         var base64 = comma >= 0 ? String(item.dataUrl).slice(comma + 1).replace(/\s/g, '') : '';
         await postSave('image', null, { id: id, base64: base64 });
         uploaded[id] = fp;
-        localStorage.setItem(UPLOADED_KEY, JSON.stringify(uploaded));
+        localStorage.setItem(UPLOADED_IMAGES_KEY, JSON.stringify(uploaded));
       }
       metadata.push({
         id: id,
@@ -185,6 +225,46 @@
     });
   }
 
+  async function syncMusic(reason) {
+    var records = await localMusicRecords();
+    var uploaded = storedMap(UPLOADED_MUSIC_KEY);
+    var metadata = [];
+
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i] || {};
+      if (!record.blob) continue;
+      var id = String(record.id || ('m_' + Date.now() + '_' + i)).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+      var fp = stableFingerprint({
+        name: record.name || 'Faixa',
+        type: record.type || record.blob.type || 'audio/mpeg',
+        size: record.blob.size || 0,
+        addedAt: record.addedAt || 0
+      });
+      if (uploaded[id] !== fp) {
+        var base64 = await blobToBase64(record.blob);
+        await postSave('audio', null, { id: id, base64: base64 });
+        uploaded[id] = fp;
+        localStorage.setItem(UPLOADED_MUSIC_KEY, JSON.stringify(uploaded));
+      }
+      metadata.push({
+        id: id,
+        name: record.name || 'Faixa',
+        type: record.type || record.blob.type || 'audio/mpeg',
+        size: record.blob.size || 0,
+        addedAt: record.addedAt || Date.now()
+      });
+    }
+
+    await postSave('music', {
+      schema: 'halftone-forge-cloud-music',
+      version: 1,
+      savedAt: new Date().toISOString(),
+      reason: reason || 'automático',
+      tracks: metadata
+    });
+    lastMusicFingerprint = await musicFingerprint();
+  }
+
   async function syncSettings() {
     await postSave('preferences', collectPreferences());
     await postSave('workspace', collectWorkspace());
@@ -196,9 +276,10 @@
     setBusy(true, 'Salvando na nuvem…');
     try {
       await syncGallery(reason || 'manual');
+      await syncMusic(reason || 'manual');
       await syncSettings();
       lastGalleryFingerprint = currentGalleryFingerprint();
-      setStatus('ok', 'Salvo na nuvem às ' + new Date().toLocaleTimeString('pt-BR'));
+      setStatus('ok', 'Imagens, músicas e configurações salvas às ' + new Date().toLocaleTimeString('pt-BR'));
     } catch (error) {
       console.error(error);
       setStatus('error', 'Erro ao salvar: ' + error.message);
@@ -221,7 +302,10 @@
   }
 
   function currentSettingsFingerprint() {
-    return stableFingerprint({ preferences: preferenceValues(), workspace: workspaceSettings() });
+    return stableFingerprint({
+      preferences: collectPreferences().values,
+      workspace: collectWorkspace().appSettings
+    });
   }
 
   function scheduleGallerySave() {
@@ -241,6 +325,19 @@
     }, 2800);
   }
 
+  function scheduleMusicSave() {
+    clearTimeout(musicTimer);
+    musicTimer = setTimeout(function () {
+      setStatus('working', 'Salvando biblioteca musical…');
+      syncMusic('música').then(function () {
+        setStatus('ok', 'Músicas salvas automaticamente');
+      }).catch(function (error) {
+        console.error(error);
+        setStatus('error', 'Erro ao salvar músicas: ' + error.message);
+      });
+    }, 1600);
+  }
+
   function dataUrlFromBlob(blob) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -252,7 +349,7 @@
 
   async function restoreAll() {
     if (busy) return;
-    if (!confirm('Restaurar a galeria e as configurações salvas na nuvem para este navegador?')) return;
+    if (!confirm('Restaurar galeria, músicas e configurações salvas na nuvem para este navegador?')) return;
     setBusy(true, 'Restaurando da nuvem…');
     try {
       var preferencesResult = await loadKind('preferences');
@@ -272,9 +369,9 @@
         var restored = [];
         for (var i = 0; i < galleryResult.data.items.length; i++) {
           var meta = galleryResult.data.items[i];
-          var response = await fetch(API_BASE + '/api/image?clientId=' + encodeURIComponent(clientId) + '&id=' + encodeURIComponent(meta.id));
-          if (!response.ok) continue;
-          var dataUrl = await dataUrlFromBlob(await response.blob());
+          var imageResponse = await fetch(API_BASE + '/api/image?clientId=' + encodeURIComponent(clientId) + '&id=' + encodeURIComponent(meta.id));
+          if (!imageResponse.ok) continue;
+          var dataUrl = await dataUrlFromBlob(await imageResponse.blob());
           restored.push({
             id: meta.id,
             title: meta.title,
@@ -289,9 +386,39 @@
         if (appWin && typeof appWin.renderGallery === 'function') appWin.renderGallery();
       }
 
+      var musicResult = await loadKind('music');
+      if (musicResult.found && musicResult.data && Array.isArray(musicResult.data.tracks) && appWin) {
+        if (typeof appWin.musicDbClear === 'function') await appWin.musicDbClear();
+        var restoredMusicMap = {};
+        for (var j = 0; j < musicResult.data.tracks.length; j++) {
+          var track = musicResult.data.tracks[j];
+          var audioResponse = await fetch(API_BASE + '/api/audio?clientId=' + encodeURIComponent(clientId) + '&id=' + encodeURIComponent(track.id));
+          if (!audioResponse.ok) continue;
+          var audioBuffer = await audioResponse.arrayBuffer();
+          var audioBlob = new Blob([audioBuffer], { type: track.type || 'audio/mpeg' });
+          if (typeof appWin.musicDbAdd === 'function') {
+            await appWin.musicDbAdd({
+              name: track.name || 'Faixa',
+              type: track.type || 'audio/mpeg',
+              blob: audioBlob,
+              addedAt: track.addedAt || Date.now()
+            });
+          }
+          restoredMusicMap[String(track.id)] = stableFingerprint({
+            name: track.name || 'Faixa',
+            type: track.type || 'audio/mpeg',
+            size: audioBlob.size,
+            addedAt: track.addedAt || 0
+          });
+        }
+        localStorage.setItem(UPLOADED_MUSIC_KEY, JSON.stringify(restoredMusicMap));
+        if (typeof appWin.loadMusicLibrary === 'function') await appWin.loadMusicLibrary();
+      }
+
       lastGalleryFingerprint = currentGalleryFingerprint();
       lastSettingsFingerprint = currentSettingsFingerprint();
-      setStatus('ok', 'Dados restaurados da nuvem');
+      lastMusicFingerprint = await musicFingerprint();
+      setStatus('ok', 'Galeria, músicas e configurações restauradas');
     } catch (error) {
       console.error(error);
       setStatus('error', 'Erro ao restaurar: ' + error.message);
@@ -314,9 +441,24 @@
     }
   }
 
+  async function checkMusicChanges() {
+    if (musicChecking || busy) return;
+    musicChecking = true;
+    try {
+      var fp = await musicFingerprint();
+      if (fp !== lastMusicFingerprint) {
+        lastMusicFingerprint = fp;
+        scheduleMusicSave();
+      }
+    } finally {
+      musicChecking = false;
+    }
+  }
+
   function beginMonitoring() {
     lastGalleryFingerprint = currentGalleryFingerprint();
     lastSettingsFingerprint = currentSettingsFingerprint();
+    musicFingerprint().then(function (fp) { lastMusicFingerprint = fp; });
 
     setInterval(function () {
       if (busy) return;
@@ -331,6 +473,8 @@
         scheduleSettingsSave();
       }
     }, 1500);
+
+    setInterval(checkMusicChanges, 3000);
   }
 
   frame.addEventListener('load', function () {
