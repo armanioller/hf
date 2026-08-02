@@ -30,10 +30,10 @@
     var current = localStorage.getItem(CLIENT_ID_KEY);
     if (current && /^[a-zA-Z0-9_-]{16,80}$/.test(current)) return current;
     var id = '';
-    if (crypto && typeof crypto.randomUUID === 'function') id = crypto.randomUUID().replace(/-/g, '');
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') id = window.crypto.randomUUID().replace(/-/g, '');
     if (!id) {
       var bytes = new Uint8Array(24);
-      crypto.getRandomValues(bytes);
+      window.crypto.getRandomValues(bytes);
       id = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
     }
     localStorage.setItem(CLIENT_ID_KEY, id);
@@ -106,31 +106,39 @@
     return Array.isArray(parsed) ? parsed : [];
   }
 
-  function collectPreferences() {
+  function preferenceValues() {
     var values = {};
     for (var i = 0; i < localStorage.length; i++) {
       var key = localStorage.key(i);
       if (!key || key === GALLERY_KEY || key === CLIENT_ID_KEY || key === UPLOADED_KEY) continue;
       if (key.indexOf(SETTINGS_PREFIX) === 0) values[key] = localStorage.getItem(key);
     }
+    return values;
+  }
+
+  function collectPreferences() {
     return {
       schema: 'halftone-forge-cloud-preferences',
       version: 1,
       savedAt: new Date().toISOString(),
-      values: values
+      values: preferenceValues()
     };
   }
 
-  function collectWorkspace() {
+  function workspaceSettings() {
     var settings = {};
     try {
       if (appWin && typeof appWin.serializeAppSettings === 'function') settings = appWin.serializeAppSettings() || {};
     } catch (_) {}
+    return settings;
+  }
+
+  function collectWorkspace() {
     return {
       schema: 'halftone-forge-project',
       version: 1,
       savedAt: new Date().toISOString(),
-      appSettings: settings,
+      appSettings: workspaceSettings(),
       gallery: null,
       userPresets: null,
       dtf: null,
@@ -177,7 +185,7 @@
     });
   }
 
-  async function syncSettings(reason) {
+  async function syncSettings() {
     await postSave('preferences', collectPreferences());
     await postSave('workspace', collectWorkspace());
     lastSettingsFingerprint = currentSettingsFingerprint();
@@ -188,7 +196,7 @@
     setBusy(true, 'Salvando na nuvem…');
     try {
       await syncGallery(reason || 'manual');
-      await syncSettings(reason || 'manual');
+      await syncSettings();
       lastGalleryFingerprint = currentGalleryFingerprint();
       setStatus('ok', 'Salvo na nuvem às ' + new Date().toLocaleTimeString('pt-BR'));
     } catch (error) {
@@ -213,7 +221,7 @@
   }
 
   function currentSettingsFingerprint() {
-    return stableFingerprint({ preferences: collectPreferences(), workspace: collectWorkspace().appSettings });
+    return stableFingerprint({ preferences: preferenceValues(), workspace: workspaceSettings() });
   }
 
   function scheduleGallerySave() {
@@ -223,12 +231,14 @@
 
   function scheduleSettingsSave() {
     clearTimeout(settingsTimer);
-    settingsTimer = setTimeout(function () { syncSettings('configurações').then(function () {
-      setStatus('ok', 'Configurações salvas automaticamente');
-    }).catch(function (error) {
-      console.error(error);
-      setStatus('error', 'Erro ao salvar configurações: ' + error.message);
-    }); }, 2800);
+    settingsTimer = setTimeout(function () {
+      syncSettings().then(function () {
+        setStatus('ok', 'Configurações salvas automaticamente');
+      }).catch(function (error) {
+        console.error(error);
+        setStatus('error', 'Erro ao salvar configurações: ' + error.message);
+      });
+    }, 2800);
   }
 
   function dataUrlFromBlob(blob) {
