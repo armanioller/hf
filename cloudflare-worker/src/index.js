@@ -22,21 +22,28 @@ export default {
       }
 
       if (url.pathname === '/api/save' && request.method === 'POST') {
-        const body = await readBody(request, 7_500_000);
+        const body = await readBody(request, 25_000_000);
         const clientId = normalizeClientId(body.clientId);
         const kind = String(body.kind || 'workspace');
         const root = `users/${clientId}`;
 
-        if (kind === 'image') {
+        if (kind === 'image' || kind === 'audio') {
           const id = normalizeId(body.id || crypto.randomUUID());
           const base64 = String(body.base64 || '').replace(/\s/g, '');
-          if (!base64 || base64.length > 7_000_000) throw httpError(413, 'Imagem ausente ou muito grande.');
-          const path = `${root}/gallery/${id}.png`;
-          await putGithubFile(env, path, base64, `Galeria: salva imagem ${id}`);
+          const maxBase64 = kind === 'audio' ? 22_000_000 : 7_000_000;
+          if (!base64 || base64.length > maxBase64) {
+            throw httpError(413, kind === 'audio' ? 'Áudio ausente ou muito grande.' : 'Imagem ausente ou muito grande.');
+          }
+          const folder = kind === 'audio' ? 'music' : 'gallery';
+          const extension = kind === 'audio' ? 'bin' : 'png';
+          const path = `${root}/${folder}/${id}.${extension}`;
+          await putGithubFile(env, path, base64, `${kind === 'audio' ? 'Música' : 'Galeria'}: salva arquivo ${id}`);
           return json({ ok: true, path }, 200, cors);
         }
 
-        if (!['gallery', 'preferences', 'workspace', 'project'].includes(kind)) throw httpError(400, 'Tipo de salvamento inválido.');
+        if (!['gallery', 'preferences', 'workspace', 'project', 'music'].includes(kind)) {
+          throw httpError(400, 'Tipo de salvamento inválido.');
+        }
         const filename = kind === 'project' ? 'project.hfp' : `${kind}.json`;
         const text = JSON.stringify(body.data ?? {}, null, 2);
         const path = `${root}/${filename}`;
@@ -47,21 +54,31 @@ export default {
       if (url.pathname === '/api/load' && request.method === 'GET') {
         const clientId = normalizeClientId(url.searchParams.get('clientId'));
         const kind = String(url.searchParams.get('kind') || 'workspace');
-        if (!['gallery', 'preferences', 'workspace', 'project'].includes(kind)) throw httpError(400, 'Tipo inválido.');
+        if (!['gallery', 'preferences', 'workspace', 'project', 'music'].includes(kind)) {
+          throw httpError(400, 'Tipo inválido.');
+        }
         const filename = kind === 'project' ? 'project.hfp' : `${kind}.json`;
         const file = await getGithubFile(env, `users/${clientId}/${filename}`);
         if (!file) return json({ ok: true, found: false }, 200, cors);
         return json({ ok: true, found: true, data: JSON.parse(base64ToUtf8(file.content)) }, 200, cors);
       }
 
-      if (url.pathname === '/api/image' && request.method === 'GET') {
+      if ((url.pathname === '/api/image' || url.pathname === '/api/audio') && request.method === 'GET') {
         const clientId = normalizeClientId(url.searchParams.get('clientId'));
         const id = normalizeId(url.searchParams.get('id'));
-        const file = await getGithubFile(env, `users/${clientId}/gallery/${id}.png`);
-        if (!file) return json({ error: 'Imagem não encontrada.' }, 404, cors);
+        const audio = url.pathname === '/api/audio';
+        const path = audio
+          ? `users/${clientId}/music/${id}.bin`
+          : `users/${clientId}/gallery/${id}.png`;
+        const file = await getGithubFile(env, path);
+        if (!file) return json({ error: audio ? 'Áudio não encontrado.' : 'Imagem não encontrada.' }, 404, cors);
         return new Response(base64ToBytes(file.content), {
           status: 200,
-          headers: { ...cors, 'content-type': 'image/png', 'cache-control': 'private, max-age=60' }
+          headers: {
+            ...cors,
+            'content-type': audio ? 'application/octet-stream' : 'image/png',
+            'cache-control': 'private, max-age=60'
+          }
         });
       }
 
@@ -93,6 +110,7 @@ function normalizeId(value) {
 }
 
 async function github(env, path, options = {}) {
+  if (!env.GITHUB_TOKEN) throw httpError(503, 'GITHUB_TOKEN não configurado no Worker.');
   const response = await fetch(`https://api.github.com${path}`, {
     ...options,
     headers: {
@@ -132,7 +150,9 @@ async function putGithubFile(env, path, content, message) {
 function utf8ToBase64(text) {
   const bytes = new TextEncoder().encode(text);
   let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
   return btoa(binary);
 }
 
