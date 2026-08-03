@@ -22,22 +22,41 @@ export default {
       }
 
       if (url.pathname === '/api/save' && request.method === 'POST') {
-        const body = await readBody(request, 25_000_000);
+        const body = await readBody(request, 50_000_000);
         const clientId = normalizeClientId(body.clientId);
         const kind = String(body.kind || 'workspace');
         const root = `users/${clientId}`;
 
-        if (kind === 'image' || kind === 'audio') {
+        if (['image', 'audio', 'source', 'export'].includes(kind)) {
           const id = normalizeId(body.id || crypto.randomUUID());
           const base64 = String(body.base64 || '').replace(/\s/g, '');
-          const maxBase64 = kind === 'audio' ? 22_000_000 : 7_000_000;
-          if (!base64 || base64.length > maxBase64) {
-            throw httpError(413, kind === 'audio' ? 'Áudio ausente ou muito grande.' : 'Imagem ausente ou muito grande.');
+          const limits = {
+            image: 7_000_000,
+            audio: 22_000_000,
+            source: 45_000_000,
+            export: 45_000_000
+          };
+          if (!base64 || base64.length > limits[kind]) {
+            throw httpError(413, 'Arquivo ausente ou muito grande.');
           }
-          const folder = kind === 'audio' ? 'music' : 'gallery';
-          const extension = kind === 'audio' ? 'bin' : 'png';
-          const path = `${root}/${folder}/${id}.${extension}`;
-          await putGithubFile(env, path, base64, `${kind === 'audio' ? 'Música' : 'Galeria'}: salva arquivo ${id}`);
+
+          let folder;
+          let filename;
+          if (kind === 'audio') {
+            folder = 'music';
+            filename = `${id}.bin`;
+          } else if (kind === 'image') {
+            folder = 'gallery';
+            filename = `${id}.png`;
+          } else {
+            folder = kind === 'source' ? 'uploads' : 'exports';
+            const fallback = kind === 'source' ? 'imagem-carregada.bin' : 'arquivo-exportado.bin';
+            filename = `${id}-${normalizeFilename(body.filename, fallback)}`;
+          }
+
+          const path = `${root}/${folder}/${filename}`;
+          const label = kind === 'audio' ? 'Música' : kind === 'image' ? 'Galeria' : kind === 'source' ? 'Upload original' : 'Exportação';
+          await putGithubFile(env, path, base64, `${label}: salva ${filename}`);
           return json({ ok: true, path }, 200, cors);
         }
 
@@ -107,6 +126,12 @@ function normalizeId(value) {
   const id = String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
   if (!id) throw httpError(400, 'ID inválido.');
   return id;
+}
+
+function normalizeFilename(value, fallback) {
+  let name = String(value || fallback || 'arquivo.bin').split(/[\\/]/).pop();
+  name = name.replace(/[^a-zA-Z0-9._ -]+/g, '_').replace(/\s+/g, '-').replace(/^\.+/, '').slice(0, 160);
+  return name || String(fallback || 'arquivo.bin');
 }
 
 async function github(env, path, options = {}) {
