@@ -7,7 +7,7 @@ export default {
     const cors = {
       'Access-Control-Allow-Origin': origin === allowed ? origin : allowed,
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Key',
       'Access-Control-Max-Age': '86400',
       'Vary': 'Origin'
     };
@@ -19,6 +19,69 @@ export default {
     try {
       if (url.pathname === '/health' && request.method === 'GET') {
         return json({ ok: true, service: 'halftone-forge-cloud' }, 200, cors);
+      }
+
+      if (url.pathname === '/api/models' && request.method === 'GET') {
+        const manifest = await readModelManifest(env);
+        return json({ ok: true, models: manifest.models }, 200, cors);
+      }
+
+      if (url.pathname === '/api/model' && request.method === 'GET') {
+        const id = normalizeId(url.searchParams.get('id'));
+        const manifest = await readModelManifest(env);
+        const model = manifest.models.find((item) => item.id === id);
+        if (!model) return json({ error: 'Modelo não encontrado.' }, 404, cors);
+
+        const file = await getGithubFile(env, `models/${id}.glb`);
+        if (!file) return json({ error: 'Arquivo do modelo não encontrado.' }, 404, cors);
+
+        return new Response(base64ToBytes(file.content), {
+          status: 200,
+          headers: {
+            ...cors,
+            'content-type': 'model/gltf-binary',
+            'content-disposition': `inline; filename="${normalizeFilename(model.filename, `${id}.glb`)}"`,
+            'cache-control': 'public, max-age=300'
+          }
+        });
+      }
+
+      if (url.pathname === '/api/admin/model' && request.method === 'POST') {
+        requireAdmin(request, env);
+        const body = await readBody(request, 46_000_000);
+        const id = normalizeId(body.id || crypto.randomUUID());
+        const base64 = String(body.base64 || '').replace(/\s/g, '');
+        if (!base64 || base64.length > 42_000_000) {
+          throw httpError(413, 'Modelo ausente ou maior que o limite permitido.');
+        }
+
+        const filename = normalizeFilename(body.filename, `${id}.glb`);
+        if (!/\.glb$/i.test(filename)) throw httpError(400, 'Somente arquivos GLB são aceitos.');
+
+        await putGithubFile(env, `models/${id}.glb`, base64, `Modelo 3D: publica ${filename}`);
+
+        const manifest = await readModelManifest(env);
+        const entry = {
+          id,
+          name: String(body.name || filename.replace(/\.glb$/i, '')).trim().slice(0, 100),
+          description: String(body.description || '').trim().slice(0, 300),
+          filename,
+          sizeBytes: Number(body.sizeBytes) || Math.floor(base64.length * 0.75),
+          updatedAt: new Date().toISOString()
+        };
+        const index = manifest.models.findIndex((item) => item.id === id);
+        if (index >= 0) manifest.models[index] = entry;
+        else manifest.models.push(entry);
+        manifest.models.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+
+        await putGithubFile(
+          env,
+          'models.json',
+          utf8ToBase64(JSON.stringify(manifest, null, 2)),
+          `Modelos 3D: atualiza catálogo com ${entry.name}`
+        );
+
+        return json({ ok: true, model: entry }, 200, cors);
       }
 
       if (url.pathname === '/api/save' && request.method === 'POST') {
@@ -107,6 +170,27 @@ export default {
     }
   }
 };
+
+function requireAdmin(request, env) {
+  if (!env.ADMIN_KEY) throw httpError(503, 'ADMIN_KEY não configurado no Worker.');
+  const provided = String(request.headers.get('X-Admin-Key') || '');
+  if (!provided || provided !== String(env.ADMIN_KEY)) throw httpError(401, 'Chave administrativa inválida.');
+}
+
+async function readModelManifest(env) {
+  const file = await getGithubFile(env, 'models.json');
+  if (!file) return { schema: 'halftone-forge-models', version: 1, models: [] };
+  try {
+    const parsed = JSON.parse(base64ToUtf8(file.content));
+    return {
+      schema: 'halftone-forge-models',
+      version: 1,
+      models: Array.isArray(parsed.models) ? parsed.models : []
+    };
+  } catch {
+    return { schema: 'halftone-forge-models', version: 1, models: [] };
+  }
+}
 
 async function readBody(request, maxBytes) {
   const length = Number(request.headers.get('content-length') || 0);
