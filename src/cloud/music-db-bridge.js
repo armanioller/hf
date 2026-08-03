@@ -118,9 +118,9 @@
   if (frame) {
     frame.addEventListener('load', function () {
       installedWindow = null;
-      setTimeout(install, 20);
-      setTimeout(install, 300);
+      setTimeout(install, 700);
+      setTimeout(install, 1300);
     });
-    setTimeout(install, 400);
+    setTimeout(install, 900);
   }
 })();
