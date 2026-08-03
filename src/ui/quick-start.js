@@ -108,6 +108,54 @@
     }
   }
 
+  function imageIsReady() {
+    var empty = doc.getElementById('emptyState');
+    var canvas = doc.getElementById('previewCanvas');
+    var removeBg = doc.getElementById('btnRemoveBg');
+    var emptyHidden = !!empty && (empty.style.display === 'none' || getComputedStyle(empty).display === 'none');
+    return emptyHidden && canvas && canvas.width > 1 && canvas.height > 1 && (!removeBg || removeBg.disabled === false);
+  }
+
+  function sendFileToDtf(file) {
+    var dtfInput = doc.getElementById('dtfFilesInput');
+    if (!dtfInput || !file) return false;
+    try {
+      var transfer = new DataTransfer();
+      transfer.items.add(file);
+      dtfInput.files = transfer.files;
+      dtfInput.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function openDtfWithFile(file) {
+    var attempts = 0;
+    var timer = setInterval(function () {
+      attempts++;
+      if (imageIsReady()) {
+        clearInterval(timer);
+        var button = doc.getElementById('btnDtfBuilder');
+        if (!button) return;
+        button.click();
+        setTimeout(function () {
+          if (!sendFileToDtf(file)) {
+            var addCurrent = doc.getElementById('btnDtfAddCurrent');
+            if (addCurrent) addCurrent.click();
+          }
+        }, 180);
+      } else if (attempts >= 80) {
+        clearInterval(timer);
+        var status = doc.getElementById('statusText');
+        if (status) {
+          status.textContent = 'A imagem não terminou de carregar. Tente novamente.';
+          status.classList.add('error');
+        }
+      }
+    }, 150);
+  }
+
   function installFileRouting() {
     var fileInput = doc && doc.getElementById('fileInput');
     if (!fileInput || fileInput.dataset.hfFlowRouting === '1') return;
@@ -115,19 +163,9 @@
     fileInput.addEventListener('change', function () {
       var mode = pendingMode;
       pendingMode = '';
-      if (!mode || mode === 'halftone') return;
-      if (mode === 'dtf') {
-        var attempts = 0;
-        var timer = setInterval(function () {
-          attempts++;
-          var button = doc.getElementById('btnDtfBuilder');
-          var canvas = doc.getElementById('previewCanvas');
-          if (button && canvas && canvas.width > 1 && canvas.height > 1) {
-            clearInterval(timer);
-            button.click();
-          } else if (attempts > 20) clearInterval(timer);
-        }, 180);
-      }
+      var selectedFile = fileInput.files && fileInput.files[0];
+      if (!selectedFile || !mode || mode === 'halftone') return;
+      if (mode === 'dtf') openDtfWithFile(selectedFile);
     }, true);
   }
 
@@ -140,7 +178,7 @@
     section.innerHTML = '' +
       '<h2>Fluxos de trabalho</h2>' +
       '<p>Na tela vazia e no botão <code>Fluxos</code>, escolha entre criar halftone, preparar uma arte para DTF ou abrir o Mockup 3D.</p>' +
-      '<ul><li><strong>Criar halftone:</strong> abre a imagem no editor principal.</li><li><strong>Preparar para DTF:</strong> carrega a imagem e abre automaticamente a preparação DTF.</li><li><strong>Criar mockup 3D:</strong> abre o Studio 3D sem exigir uma imagem no editor.</li></ul>';
+      '<ul><li><strong>Criar halftone:</strong> abre a imagem no editor principal.</li><li><strong>Preparar para DTF:</strong> carrega a imagem, adiciona o arquivo ao projeto DTF e abre automaticamente a preparação.</li><li><strong>Criar mockup 3D:</strong> abre o Studio 3D sem exigir uma imagem no editor.</li></ul>';
     var first = content.querySelector('section');
     if (first && first.nextSibling) content.insertBefore(section, first.nextSibling);
     else content.appendChild(section);
