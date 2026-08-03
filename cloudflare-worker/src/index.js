@@ -32,10 +32,10 @@ export default {
         const model = manifest.models.find((item) => item.id === id);
         if (!model) return json({ error: 'Modelo não encontrado.' }, 404, cors);
 
-        const file = await getGithubFile(env, `models/${id}.glb`);
-        if (!file) return json({ error: 'Arquivo do modelo não encontrado.' }, 404, cors);
+        const bytes = await getGithubBytes(env, `models/${id}.glb`);
+        if (!bytes) return json({ error: 'Arquivo do modelo não encontrado.' }, 404, cors);
 
-        return new Response(base64ToBytes(file.content), {
+        return new Response(bytes, {
           status: 200,
           headers: {
             ...cors,
@@ -152,9 +152,9 @@ export default {
         const path = audio
           ? `users/${clientId}/music/${id}.bin`
           : `users/${clientId}/gallery/${id}.png`;
-        const file = await getGithubFile(env, path);
-        if (!file) return json({ error: audio ? 'Áudio não encontrado.' : 'Imagem não encontrada.' }, 404, cors);
-        return new Response(base64ToBytes(file.content), {
+        const bytes = await getGithubBytes(env, path);
+        if (!bytes) return json({ error: audio ? 'Áudio não encontrado.' : 'Imagem não encontrada.' }, 404, cors);
+        return new Response(bytes, {
           status: 200,
           headers: {
             ...cors,
@@ -242,6 +242,32 @@ async function github(env, path, options = {}) {
 async function getGithubFile(env, path) {
   const encoded = path.split('/').map(encodeURIComponent).join('/');
   return github(env, `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/${encoded}?ref=main`);
+}
+
+async function getGithubBytes(env, path) {
+  if (!env.GITHUB_TOKEN) throw httpError(503, 'GITHUB_TOKEN não configurado no Worker.');
+  const encoded = path.split('/').map(encodeURIComponent).join('/');
+  const response = await fetch(
+    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/${encoded}?ref=main`,
+    {
+      headers: {
+        'Accept': 'application/vnd.github.raw',
+        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'halftone-forge-cloud'
+      }
+    }
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    let message = `GitHub respondeu ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body?.message) message = body.message;
+    } catch {}
+    throw httpError(response.status, message);
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 async function putGithubFile(env, path, content, message) {
