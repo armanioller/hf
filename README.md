@@ -32,8 +32,18 @@ O botão **Salvar agora** executa uma sincronização manual completa, mesmo qua
 
 O botão **Restaurar da nuvem** substitui os dados locais pelos dados salvos para o identificador atual do navegador.
 
+### Cópias automáticas silenciosas
+
+- Ao carregar, arrastar ou colar uma imagem, o arquivo original é arquivado em `uploads/`.
+- Ao exportar ou baixar um arquivo pelo app, uma cópia idêntica é arquivada em `exports/`.
+- Essas cópias acontecem em segundo plano, sem toast, aviso ou mudança no status da interface.
+- Elas funcionam mesmo quando a opção geral **Salvar automaticamente na nuvem** está desligada.
+- O limite técnico é de 32 MB por arquivo; arquivos maiores continuam funcionando localmente, mas não recebem a cópia remota.
+
 ### Dados sincronizados
 
+- imagens originais carregadas, arrastadas ou coladas;
+- arquivos exportados ou baixados pelo app;
 - imagens e metadados da galeria;
 - músicas importadas;
 - preferências da interface e do player;
@@ -60,6 +70,8 @@ Cada navegador recebe um identificador anônimo salvo em `localStorage`. Os dado
 
 ```text
 users/<identificador>/
+├── uploads/
+├── exports/
 ├── gallery/
 ├── music/
 ├── gallery.json
@@ -77,6 +89,7 @@ Ao limpar os dados do navegador, usar modo anônimo ou trocar de navegador, um n
 - `index.html`: contêiner público que carrega o aplicativo.
 - `app.html`: aplicativo principal.
 - `cloud-public-sync.js`: sincronização, controles em Configurações e documentação dinâmica.
+- `silent-archive.js`: cópias silenciosas dos arquivos carregados e exportados.
 - `gallery-memory-bridge.js`: ponte para galerias grandes mantidas em memória.
 - `cloudflare-worker/`: API protegida responsável por acessar o repositório privado.
 
