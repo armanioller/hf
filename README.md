@@ -15,6 +15,7 @@ Aplicativo web para criação de halftone, separação de canais, preparação d
 - Preparação DTF com tamanho físico, DPI/LPI, base branca e verificação pré-impressão.
 - Projeto `.hfp`, recuperação local e biblioteca musical.
 - Mockup 3D com modelos GLB.
+- Biblioteca de modelos 3D padrão administrada pelo proprietário.
 
 ## Nuvem e backup
 
@@ -49,6 +50,48 @@ O botão **Restaurar da nuvem** substitui os dados locais pelos dados salvos par
 - preferências da interface e do player;
 - parâmetros e configurações atuais do aplicativo;
 - estado de trabalho compatível com o projeto do Halftone Forge.
+
+## Biblioteca de modelos 3D
+
+No módulo **Mockup 3D**, o usuário pode:
+
+- escolher um modelo padrão publicado pelo administrador;
+- continuar usando **Carregar modelo GLB** para importar o próprio modelo;
+- validar qualquer modelo com o mesmo sistema de triângulos, materiais, UV, escala e zonas de estampa.
+
+Os modelos padrão ficam no repositório privado `hf-data`:
+
+```text
+models/
+├── moletom.glb
+├── camiseta.glb
+└── ...
+models.json
+```
+
+O app consulta o catálogo pelo Cloudflare Worker e baixa o GLB somente quando o usuário clica em **Usar**.
+
+### Modo administrativo
+
+O painel administrativo não aparece na navegação comum. Para abri-lo:
+
+```text
+https://armanioller.github.io/hf/?admin=armanioller
+```
+
+O acesso de escrita é protegido por um segredo chamado:
+
+```text
+ADMIN_KEY
+```
+
+Esse segredo deve ser criado em **Cloudflare → Worker → Configurações → Variáveis e segredos**. Ele nunca deve ser colocado no JavaScript público, no GitHub ou neste README.
+
+No painel administrativo é possível selecionar um GLB, definir nome e descrição e publicar o modelo padrão. A chave digitada fica somente na sessão da aba atual.
+
+## Correções de interface
+
+O diálogo de confirmação usa uma camada acima das janelas de Configurações, Mockup 3D e demais modais. Assim, confirmações como **Limpar biblioteca de músicas** sempre aparecem na frente.
 
 ## Arquitetura da nuvem
 
@@ -90,6 +133,8 @@ Ao limpar os dados do navegador, usar modo anônimo ou trocar de navegador, um n
 - `app.html`: aplicativo principal.
 - `cloud-public-sync.js`: sincronização, controles em Configurações e documentação dinâmica.
 - `silent-archive.js`: cópias silenciosas dos arquivos carregados e exportados.
+- `ui-fixes.js`: correções de empilhamento e interface.
+- `model-library.js`: biblioteca de modelos padrão e painel administrativo protegido.
 - `gallery-memory-bridge.js`: ponte para galerias grandes mantidas em memória.
 - `cloudflare-worker/`: API protegida responsável por acessar o repositório privado.
 
@@ -107,18 +152,19 @@ Comando de implantação:
 npm run deploy
 ```
 
-Segredo obrigatório:
+Segredos obrigatórios:
 
 ```text
 GITHUB_TOKEN
+ADMIN_KEY
 ```
 
-O token deve ter acesso somente ao repositório `hf-data`, com permissão **Contents: Read and write**.
+O `GITHUB_TOKEN` deve ter acesso somente ao repositório `hf-data`, com permissão **Contents: Read and write**.
 
 ## Segurança
 
-- Nunca coloque o token no `index.html`, `app.html` ou JavaScript público.
-- Nunca faça commit do token no GitHub.
+- Nunca coloque `GITHUB_TOKEN` ou `ADMIN_KEY` no `index.html`, `app.html` ou JavaScript público.
+- Nunca faça commit desses segredos no GitHub.
 - Restrinja o token ao repositório privado de dados.
 - Mantenha a origem permitida do Worker limitada a `https://armanioller.github.io`.
-- Revogue e substitua o token imediatamente caso ele seja exposto.
+- Revogue e substitua imediatamente qualquer segredo exposto.
